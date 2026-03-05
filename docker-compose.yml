@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: toeic-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-toeic}
+      MYSQL_USER: ${DB_USER:-toeic}
+      MYSQL_PASSWORD: ${DB_PASS:-toeicpassword}
+    ports:
+      - "${DB_PORT:-3308}:3306"
+    volumes:
+      - toeic-mysql-data:/var/lib/mysql
+
+volumes:
+  toeic-mysql-data:
