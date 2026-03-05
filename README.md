@@ -17,8 +17,15 @@ toeic/
 │   ├── App.tsx           # 전체 UI (로그인, 학습, 연습, 나의 단어)
 │   └── index.ts          # Expo 앱 진입점
 ├── toeic.json            # TOEIC 단어장 데이터
-└── scripts/              # 유틸리티 스크립트
+└── docs/
+    └── architecture.png  # 서버 아키텍처 다이어그램
 ```
+
+---
+
+## 아키텍처
+
+![서버 아키텍처](docs/architecture.png)
 
 ---
 
