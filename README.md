@@ -1,113 +1,165 @@
-# TOEIC 단어 학습 앱
+# TOEIC Vocabulary Learning App
 
-> 하루 3~50개 단어를 학습하는 미니멀 영어 학습 앱
+> A minimalist English vocabulary learning app — study 3 to 50 words a day with AI-powered practice.
 
 ---
 
-## 프로젝트 구조
+## Architecture
+
+![Architecture Diagram](docs/architecture.png)
+
+---
+
+## Project Structure
 
 ```
 toeic/
-├── api/                  # 백엔드 (Node.js + Express + TypeScript)
+├── api/                     # Backend (Node.js + Express + TypeScript)
 │   └── src/
-│       ├── index.ts      # Express 서버, 인증, API 라우팅
-│       ├── voca.ts       # 단어장 로드 및 랜덤 선택
-│       └── wordPractice.ts  # AI 예문 생성 (Ollama / OpenAI)
-├── app/                  # 프론트엔드 (React Native + Expo + TypeScript)
-│   ├── App.tsx           # 전체 UI (로그인, 학습, 연습, 나의 단어)
-│   └── index.ts          # Expo 앱 진입점
-├── toeic.json            # TOEIC 단어장 데이터
+│       ├── index.ts         # Express server, auth, API routes, metrics
+│       ├── autoscaler.ts    # PM2 dynamic auto-scaler (CPU/RPM-based)
+│       ├── voca.ts          # Vocabulary loader & random picker
+│       └── wordPractice.ts  # AI sentence generation (Ollama / OpenAI)
+├── app/                     # Frontend (React Native + Expo + TypeScript)
+│   ├── App.tsx              # Full UI (auth, learning, quiz, practice, my words)
+│   ├── app.json             # Expo config
+│   └── eas.json             # EAS Build profiles (APK / AAB)
+├── deploy/                  # Production deployment scripts
+│   ├── setup-server.sh      # Cloud server initial setup
+│   ├── setup-nginx.sh       # Nginx reverse proxy + SSL
+│   ├── deploy.sh            # API code deployment
+│   ├── migrate-db.sh        # MySQL data migration
+│   └── build-apk.sh         # Android APK/AAB build
+├── ecosystem.config.js      # PM2 cluster + auto-scaler config
+├── docker-compose.yml       # MySQL container (development)
+├── toeic.json               # TOEIC vocabulary dataset
 └── docs/
-    └── architecture.png  # 서버 아키텍처 다이어그램
+    ├── architecture.png     # Architecture diagram
+    └── performance-improvements.md
 ```
 
 ---
 
-## 아키텍처
+## Tech Stack
 
-![서버 아키텍처](docs/architecture.png)
-
----
-
-## 기술 스택
-
-| 구분 | 기술 |
-|------|------|
-| **프론트엔드** | React Native + Expo + TypeScript |
-| **백엔드** | Node.js + Express + TypeScript |
-| **데이터베이스** | MySQL |
-| **인증** | JWT (jsonwebtoken) + bcryptjs |
-| **AI 예문 생성** | Ollama (phi3:mini 예문 + qwen2:1.5b 번역) |
+| Layer | Technology |
+|-------|-----------|
+| **Frontend** | React Native + Expo + TypeScript |
+| **Backend** | Node.js + Express + TypeScript |
+| **Database** | MySQL 8.4 (Connection Pool, Transactions) |
+| **Auth** | JWT + bcryptjs |
+| **AI** | Ollama (phi3:mini for sentences, qwen2:1.5b for translation) |
 | **AI Fallback** | OpenAI GPT-4o-mini |
-| **플랫폼** | Web, iOS, Android (Expo) |
+| **Process Manager** | PM2 Cluster Mode + Custom Auto-scaler |
+| **Security** | Helmet, CORS, Rate Limiting, Input Validation |
+| **Deployment** | Nginx + Let's Encrypt SSL, EAS Build (Android) |
+| **Platform** | Web, Android (APK), iOS |
 
 ---
 
-## 주요 기능
+## Key Features
 
-### 1. 단어 학습
-- 학습할 단어 수를 직접 입력 (최대 50개)
-- 단어 카드에서 "알겠다" / "모르겠다" 선택
-- 이미 학습한 단어는 자동 제외
-- TTS 발음 듣기 지원
+### 1. Vocabulary Learning
+- Choose how many words to study per session (up to 50)
+- Flashcard-style word cards with "Show meaning" toggle
+- Previously studied words are automatically excluded
+- TTS pronunciation support
 
-### 2. AI 예문 연습
-- 단어를 입력하면 Ollama가 10개 영어 예문 생성
-- qwen2가 한국어로 번역
-- 한국어를 보고 영어로 작성하는 연습 모드
-- 작성 결과 저장 및 수정 가능
+### 2. AI-Powered Quiz
+- Fill-in-the-blank and Korean→English quiz types
+- AI generates contextual sentences for each word
+- Results tracked with correct/incorrect history per word
+- Detailed word history view with wrong answer review
 
-### 3. 나의 단어
-- 학습한 단어 목록 (아는 단어 / 모르는 단어 분류)
-- 연습 기록 조회 및 재작성
+### 3. AI Sentence Practice
+- Enter any English word → Ollama generates 10 example sentences
+- qwen2 translates sentences to Korean
+- Practice mode: read Korean, write English
+- Save and edit practice results
 
----
+### 4. AI Composition
+- AI generates a paragraph using all studied words
+- Korean translation provided as a prompt
+- Write your own English composition and compare with AI
 
-## API 엔드포인트
-
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| POST | `/api/register` | 회원가입 |
-| POST | `/api/login` | 로그인 |
-| GET | `/api/me` | 인증된 사용자 정보 |
-| GET | `/api/words/today?count=N` | 오늘 학습할 단어 (랜덤) |
-| POST | `/api/words/save` | 학습 결과 저장 |
-| GET | `/api/words/my` | 사용자별 학습 단어 |
-| POST | `/api/word/practice` | AI 예문 생성 |
-| POST | `/api/practice/save` | 예문 연습 저장 |
-| PATCH | `/api/practice/:id` | 예문 연습 수정 |
-| GET | `/api/practice/my` | 사용자별 연습 목록 |
-| GET | `/api/health` | 서버 상태 |
-| GET | `/api/health/ollama` | Ollama 연결 상태 |
+### 5. My Words
+- All studied words with known/unknown classification
+- Practice history with re-edit capability
+- Per-word quiz history and wrong answer review
 
 ---
 
-## 실행 방법
+## Performance & Scalability (1,000 Concurrent Users)
 
-### 사전 요구사항
-- Node.js 18+
-- MySQL
-- Ollama (로컬 LLM, 선택)
+| Feature | Implementation |
+|---------|---------------|
+| **DB Connection Pool** | mysql2 pool (30 connections, queue limit 100) |
+| **Transactions** | All write operations wrapped in transactions |
+| **Rate Limiting** | Global (120/min), Auth (20/15min), AI (10/min) |
+| **PM2 Cluster** | Multi-process with CPU core auto-detection |
+| **Auto-scaling** | Custom scaler monitors CPU load, RPM, response time |
+| **AI Concurrency** | Semaphore pattern (max 5 concurrent AI calls) |
+| **Security** | Helmet headers, GZIP compression, input size limits |
+| **Graceful Shutdown** | SIGTERM/SIGINT handling, DB pool cleanup |
+| **Real-time Metrics** | `/api/metrics` endpoint (RPM, connections, response time) |
 
-### 1. 백엔드
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/register` | User registration |
+| POST | `/api/login` | User login |
+| GET | `/api/me` | Authenticated user info |
+| GET | `/api/words/today?count=N` | Get random words for today's session |
+| POST | `/api/words/save` | Save study results (known/unknown) |
+| GET | `/api/words/my` | User's word list |
+| POST | `/api/word/practice` | AI sentence generation |
+| POST | `/api/practice/save` | Save practice session |
+| PATCH | `/api/practice/:id` | Update practice session |
+| GET | `/api/practice/my` | User's practice history |
+| POST | `/api/quiz/generate` | AI quiz generation |
+| POST | `/api/quiz/save` | Save quiz results |
+| GET | `/api/quiz/word/:word` | Word detail + quiz history |
+| POST | `/api/composition/generate` | AI composition generation |
+| POST | `/api/composition/save` | Save composition |
+| GET | `/api/metrics` | Real-time server metrics |
+| GET | `/api/health` | Health check |
+
+---
+
+## Getting Started
+
+### Prerequisites
+- Node.js 20+
+- MySQL 8+
+- Ollama (optional, for local LLM)
+
+### 1. Database
+
+```bash
+docker-compose up -d    # Start MySQL container
+```
+
+### 2. Backend
 
 ```bash
 cd api
-cp .env.example .env    # .env 파일 수정
+cp .env.example .env    # Edit with your credentials
 npm install
-npm run dev             # 개발 서버 (tsx watch)
+npm run dev             # Development (tsx watch, port 4000)
 ```
 
-### 2. 프론트엔드
+### 3. Frontend
 
 ```bash
 cd app
 npm install
-npm run web             # 웹 브라우저
-npm run start           # Expo Go
+npm start               # Expo dev server
 ```
 
-### 3. Ollama (선택)
+### 4. Ollama (Optional)
 
 ```bash
 ollama serve
@@ -115,33 +167,57 @@ ollama pull phi3:mini
 ollama pull qwen2:1.5b
 ```
 
----
+### 5. Production (PM2 Cluster)
 
-## 데이터베이스
-
-MySQL에 `toeic` 데이터베이스를 생성하면, 서버 시작 시 필요한 테이블이 자동 생성됩니다.
-
-- `users` — 사용자 (별도 생성 필요)
-- `user_words` — 학습 기록 (자동 생성)
-- `user_practice_sessions` — 연습 기록 (자동 생성)
-
-### users 테이블 생성
-
-```sql
-CREATE TABLE users (
-  id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
-  email VARCHAR(255) UNIQUE NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  name VARCHAR(100),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+```bash
+cd api && npm run build && cd ..
+pm2 start ecosystem.config.js
+pm2 save && pm2 startup
 ```
 
 ---
 
-## 설계 철학
+## Production Deployment
 
-- **극단적 미니멀 UX**: 설명, 점수, 스트릭, 광고 없음
-- **부담 없는 학습**: 열자마자 끝나는 경험
-- **AI 활용**: 로컬 LLM으로 비용 최소화, 예문 품질 확보
-- **조용한 후원 모델**: 기능 제한 없이 자발적 후원으로 운영
+Deployment scripts are provided in the `deploy/` directory:
+
+```bash
+# 1. Cloud server setup (Ubuntu 22.04)
+sudo ./deploy/setup-server.sh
+
+# 2. Upload code & deploy API
+./deploy/deploy.sh
+
+# 3. Nginx + SSL
+sudo ./deploy/setup-nginx.sh yourdomain.com
+
+# 4. DB migration (from local to cloud)
+./deploy/migrate-db.sh dump       # On local server
+./deploy/migrate-db.sh restore    # On cloud server
+
+# 5. Android APK build
+./deploy/build-apk.sh             # Preview APK
+./deploy/build-apk.sh prod        # Production AAB
+```
+
+See [`deploy/README.md`](deploy/README.md) for detailed instructions.
+
+---
+
+## Database Schema
+
+Tables are auto-created on server startup:
+
+- `users` — User accounts (email, password hash)
+- `user_words` — Study history (word, status, quiz sentence)
+- `user_practice_sessions` — AI practice sessions (examples, user writing)
+- `user_quiz_results` — Quiz results (type, prompt, answer, correctness)
+
+---
+
+## Design Philosophy
+
+- **Extreme minimalism** — No scores, streaks, ads, or gamification
+- **Zero friction** — Open the app, study, done
+- **Local AI first** — Cost-free with Ollama, OpenAI as fallback
+- **Production ready** — Handles 1,000 concurrent users with auto-scaling
