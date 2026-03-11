@@ -310,6 +310,183 @@ async function callOpenAI(word: string, context?: WordContext): Promise<WordPrac
   return await translateResultKo(result);
 }
 
+export type CompositionResult = {
+  english: string;
+  korean: string;
+};
+
+function buildCompositionPrompt(words: string[]): string {
+  const list = words.join(", ");
+  return `Write a short English paragraph (5-8 sentences) using ALL of these words: ${list}
+
+RULES:
+- Business/TOEIC context.
+- Use simple, clear sentences. Each sentence 10-20 words.
+- Every word from the list MUST appear at least once.
+- Output ONLY valid JSON:
+{"english":"...the paragraph..."}`;
+}
+
+async function callOllamaComposition(words: string[]): Promise<CompositionResult> {
+  const baseUrl = getOllamaBaseUrl();
+  const model = process.env.OLLAMA_MODEL || "phi3:mini";
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 120_000);
+  const res = await fetch(`${baseUrl}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      prompt: buildCompositionPrompt(words),
+      stream: false,
+      options: { num_predict: 1000, temperature: 0.6, top_p: 0.9 },
+    }),
+    signal: ctrl.signal,
+  }).finally(() => clearTimeout(t));
+
+  if (!res.ok) throw new Error(`Ollama 오류 (${res.status})`);
+  const data = (await res.json()) as { response?: string };
+  const text = data.response || "";
+
+  let english = "";
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*"english"\s*:\s*"([\s\S]*?)"\s*\}/);
+    if (jsonMatch) {
+      english = jsonMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+    }
+  } catch {}
+  if (!english) {
+    english = text.replace(/```[\s\S]*?```/g, "").replace(/\{[\s\S]*?\}/g, "").trim();
+    if (!english) english = text.trim();
+  }
+  if (english.length < 20) throw new Error("작문 생성 실패 (응답이 너무 짧습니다)");
+
+  let korean = "";
+  try {
+    korean = await translateEnToKo(english);
+  } catch {
+    korean = "";
+  }
+
+  return { english, korean };
+}
+
+export async function generateComposition(words: string[]): Promise<CompositionResult> {
+  if (!words.length) throw new Error("단어 목록이 필요합니다.");
+
+  try {
+    return await callOllamaComposition(words);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[composition] Ollama failed:", msg);
+    throw new Error(`작문 생성에 실패했습니다. ${msg}`);
+  }
+}
+
+export type QuizSentenceItem = {
+  word: string;
+  sentences: { original: string; blanked: string }[];
+};
+
+function buildQuizPrompt(words: string[]): string {
+  const list = words.map((w) => `"${w}"`).join(", ");
+  return `Generate 2 short English sentences for EACH word: ${list}
+
+RULES:
+- Each sentence MUST contain the EXACT target word (not variants).
+- Business/TOEIC context. 8-14 words per sentence. Simple grammar.
+- Output ONLY valid JSON array:
+[{"word":"...","s1":"...","s2":"..."},{"word":"...","s1":"...","s2":"..."}]`;
+}
+
+function blankOutWord(sentence: string, word: string): string {
+  const re = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+  return sentence.replace(re, "____");
+}
+
+async function callOllamaQuiz(words: string[]): Promise<QuizSentenceItem[]> {
+  const baseUrl = getOllamaBaseUrl();
+  const model = process.env.OLLAMA_MODEL || "phi3:mini";
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 120_000);
+  const res = await fetch(`${baseUrl}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      prompt: buildQuizPrompt(words),
+      stream: false,
+      options: { num_predict: 2000, temperature: 0.5, top_p: 0.9, repeat_penalty: 1.15 },
+    }),
+    signal: ctrl.signal,
+  }).finally(() => clearTimeout(t));
+
+  if (!res.ok) throw new Error(`Ollama 오류 (${res.status})`);
+  const data = (await res.json()) as { response?: string };
+  const text = data.response || "";
+
+  let parsed: any[] = [];
+  try {
+    const arrMatch = text.match(/\[[\s\S]*\]/);
+    if (arrMatch) parsed = JSON.parse(arrMatch[0]);
+  } catch {
+    const items: any[] = [];
+    const re = /\{\s*"word"\s*:\s*"([^"]+)"\s*,\s*"s1"\s*:\s*"([^"]+)"\s*,\s*"s2"\s*:\s*"([^"]+)"\s*\}/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      items.push({ word: m[1], s1: m[2], s2: m[3] });
+    }
+    parsed = items;
+  }
+
+  const result: QuizSentenceItem[] = [];
+  const wordSet = new Map(words.map((w) => [w.toLowerCase(), w]));
+
+  for (const item of parsed) {
+    const w = wordSet.get(item.word?.toLowerCase());
+    if (!w) continue;
+    const sArr: { original: string; blanked: string }[] = [];
+    for (const key of ["s1", "s2"]) {
+      const sent = item[key];
+      if (typeof sent === "string" && sent.length > 10) {
+        const blanked = blankOutWord(sent, w);
+        if (blanked !== sent) {
+          sArr.push({ original: sent, blanked });
+        }
+      }
+    }
+    if (sArr.length > 0) result.push({ word: w, sentences: sArr });
+    wordSet.delete(w.toLowerCase());
+  }
+
+  if (result.length < words.length) {
+    for (const [, w] of wordSet) {
+      result.push({
+        word: w,
+        sentences: [
+          { original: `The company will ${w} the new product next month.`, blanked: `The company will ____ the new product next month.` },
+          { original: `We need to ${w} before the deadline.`, blanked: `We need to ____ before the deadline.` },
+        ],
+      });
+    }
+  }
+
+  return result;
+}
+
+export async function generateQuizSentences(words: string[]): Promise<QuizSentenceItem[]> {
+  if (!words.length) throw new Error("단어 목록이 필요합니다.");
+  try {
+    return await callOllamaQuiz(words);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[quiz] Ollama failed:", msg);
+    throw new Error(`퀴즈 문장 생성에 실패했습니다. ${msg}`);
+  }
+}
+
 export async function generateWordPractice(word: string): Promise<WordPracticeResult> {
   const trimmed = word.trim();
   if (!trimmed) throw new Error("단어를 입력해 주세요.");

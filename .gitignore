@@ -46,3 +46,9 @@ android/
 # IDE
 .idea/
 .vscode/
+
+# Google Play service account key
+google-service-account.json
+
+# DB backups
+*.sql

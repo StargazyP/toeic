@@ -12,12 +12,24 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Speech from "expo-speech";
 
-const API_BASE = "http://jangdonggun.iptime.org:4000";
+const API_BASE =
+  process.env.EXPO_PUBLIC_API_URL || "http://jangdonggun.iptime.org:4000";
 
 const STORAGE_KEY_TOKEN = "toeic_token";
 const STORAGE_KEY_DAILY_COUNT = "toeic_daily_count";
 
 type Word = { id: number; word: string; meaning: string; pos: string };
+
+type QuizResultItem = {
+  word: string;
+  meaning: string;
+  pos: string;
+  quiz_type: string;
+  prompt: string;
+  user_answer: string;
+  correct_answer: string;
+  is_correct: boolean;
+};
 
 // ─── Web hover style injection ───
 function WebStyleInjector() {
@@ -85,7 +97,6 @@ export default function App() {
   const [words, setWords] = useState<Word[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showMeaning, setShowMeaning] = useState(false);
-  const [knownWords, setKnownWords] = useState<number[]>([]);
   const [sessionFinished, setSessionFinished] = useState(false);
   const [wordsError, setWordsError] = useState("");
 
@@ -99,6 +110,9 @@ export default function App() {
     user_english: string[];
   } | null>(null);
   const [showCountInput, setShowCountInput] = useState(false);
+  const [showQuiz, setShowQuiz] = useState(false);
+  const [quizResults, setQuizResults] = useState<QuizResultItem[]>([]);
+  const [showComposition, setShowComposition] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -154,7 +168,6 @@ export default function App() {
       setWords(data.words);
       setCurrentIndex(0);
       setShowMeaning(false);
-      setKnownWords([]);
       setSessionFinished(false);
     } catch (err: any) {
       setWordsError(err.message);
@@ -181,52 +194,19 @@ export default function App() {
     setShowWordPractice(false);
     setShowMyWords(false);
     setShowCountInput(false);
+    setShowQuiz(false);
+    setQuizResults([]);
+    setShowComposition(false);
   }, []);
 
-  const saveWordsToServer = useCallback(
-    async (knownIds: number[]) => {
-      if (!token) return;
-      const payload = words.map((w) => ({
-        word: w.word,
-        meaning: w.meaning,
-        pos: w.pos,
-        status: knownIds.includes(w.id) ? "known" as const : "unknown" as const,
-      }));
-      try {
-        await fetch(`${API_BASE}/api/words/save`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ words: payload }),
-        });
-      } catch {}
-    },
-    [token, words]
-  );
-
-  const handleKnow = useCallback(() => {
-    const newKnown = [...knownWords, words[currentIndex]?.id];
-    setKnownWords(newKnown);
+  const handleNext = useCallback(() => {
     if (currentIndex + 1 >= words.length) {
       setSessionFinished(true);
-      saveWordsToServer(newKnown);
     } else {
       setCurrentIndex((i) => i + 1);
       setShowMeaning(false);
     }
-  }, [currentIndex, words, knownWords, saveWordsToServer]);
-
-  const handleDontKnow = useCallback(() => {
-    if (currentIndex + 1 >= words.length) {
-      setSessionFinished(true);
-      saveWordsToServer(knownWords);
-    } else {
-      setCurrentIndex((i) => i + 1);
-      setShowMeaning(false);
-    }
-  }, [currentIndex, words, knownWords, saveWordsToServer]);
+  }, [currentIndex, words]);
 
   // ── Render ──
 
@@ -412,9 +392,42 @@ export default function App() {
     );
   }
 
+  // ── Composition (AI 작문 연습) ──
+  if (sessionFinished && showComposition) {
+    return (
+      <>
+        <WebStyleInjector />
+        <CompositionScreen
+          token={token}
+          words={words}
+          onBack={() => setShowComposition(false)}
+          onHome={handleGoBackToStart}
+        />
+      </>
+    );
+  }
+
+  // ── Quiz ──
+  if (sessionFinished && showQuiz) {
+    return (
+      <>
+        <WebStyleInjector />
+        <QuizScreen
+          token={token}
+          words={words}
+          onFinish={(results) => {
+            setQuizResults(results);
+            setShowQuiz(false);
+          }}
+          onBack={() => setShowQuiz(false)}
+        />
+      </>
+    );
+  }
+
   // ── Session Finished ──
   if (sessionFinished) {
-    const unknownWords = words.filter((w) => !knownWords.includes(w.id));
+    const quizCorrect = quizResults.filter((r) => r.is_correct).length;
     return (
       <View style={s.page}>
         <WebStyleInjector />
@@ -424,72 +437,89 @@ export default function App() {
           contentContainerStyle={s.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={s.heading}>학습 완료</Text>
+          <Text style={s.heading}>단어 확인 완료</Text>
           <View style={s.statRow}>
             <View style={s.statBox}>
               <Text style={s.statNum}>{words.length}</Text>
-              <Text style={s.statLabel}>전체</Text>
-            </View>
-            <View style={s.statBox}>
-              <Text style={s.statNum}>{knownWords.length}</Text>
-              <Text style={s.statLabel}>알겠다</Text>
-            </View>
-            <View style={s.statBox}>
-              <Text style={s.statNum}>{words.length - knownWords.length}</Text>
-              <Text style={s.statLabel}>모르겠다</Text>
+              <Text style={s.statLabel}>학습 단어</Text>
             </View>
           </View>
+
+          {quizResults.length > 0 && (
+            <>
+              <View style={s.statRow}>
+                <View style={s.statBox}>
+                  <Text style={s.statNum}>{quizResults.length}</Text>
+                  <Text style={s.statLabel}>퀴즈 문제</Text>
+                </View>
+                <View style={s.statBox}>
+                  <Text style={[s.statNum, { color: "#22C55E" }]}>{quizCorrect}</Text>
+                  <Text style={s.statLabel}>정답</Text>
+                </View>
+                <View style={s.statBox}>
+                  <Text style={[s.statNum, { color: "#EF4444" }]}>{quizResults.length - quizCorrect}</Text>
+                  <Text style={s.statLabel}>오답</Text>
+                </View>
+              </View>
+
+              {(() => {
+                const byWord = new Map<string, QuizResultItem[]>();
+                quizResults.forEach((r) => {
+                  const arr = byWord.get(r.word) || [];
+                  arr.push(r);
+                  byWord.set(r.word, arr);
+                });
+                return (
+                  <View style={s.listCard}>
+                    <Text style={s.listTitle}>퀴즈 결과</Text>
+                    {Array.from(byWord.entries()).map(([word, items], i, arr) => {
+                      const allCorrect = items.every((r) => r.is_correct);
+                      return (
+                        <View key={word} style={[s.listRow, i === arr.length - 1 && { borderBottomWidth: 0 }]}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={s.listWord}>{word}</Text>
+                            <Text style={[s.listMeaning, { color: allCorrect ? "#22C55E" : "#EF4444" }]}>
+                              {allCorrect ? "아는 단어" : "모르는 단어"}
+                            </Text>
+                          </View>
+                          <Text style={[s.myWordBadge, allCorrect ? s.badgeKnown : s.badgeUnknown]}>
+                            {allCorrect ? "O" : "X"}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
+            </>
+          )}
 
           <View style={s.listCard}>
             <Text style={s.listTitle}>오늘 본 단어</Text>
             {words.map((w, i) => (
-              <View
-                key={w.id}
-                style={[
-                  s.listRow,
-                  i === words.length - 1 && { borderBottomWidth: 0 },
-                ]}
-              >
+              <View key={w.id} style={[s.listRow, i === words.length - 1 && { borderBottomWidth: 0 }]}>
                 <Text style={s.listWord}>{w.word}</Text>
                 <Text style={s.listMeaning}>{w.meaning}</Text>
               </View>
             ))}
           </View>
 
-          {unknownWords.length > 0 && (
-            <View style={s.listCard}>
-              <Text style={s.listTitle}>
-                모르는 단어
-              </Text>
-              {unknownWords.map((w, i) => (
-                <View
-                  key={w.id}
-                  style={[
-                    s.listRow,
-                    i === unknownWords.length - 1 && { borderBottomWidth: 0 },
-                  ]}
-                >
-                  <Text style={s.listWord}>{w.word}</Text>
-                  <Text style={s.listMeaning}>{w.meaning}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-
           <View style={s.finishBtns}>
+            {quizResults.length === 0 && (
+              <HoverButton
+                onPress={() => setShowQuiz(true)}
+                style={s.btnPrimary}
+                hoverStyle={s.btnPrimaryHover}
+              >
+                <Text style={s.btnPrimaryText}>퀴즈 풀기</Text>
+              </HoverButton>
+            )}
             <HoverButton
               onPress={handleGoBackToStart}
-              style={s.btnPrimary}
-              hoverStyle={s.btnPrimaryHover}
-            >
-              <Text style={s.btnPrimaryText}>처음으로 돌아가기</Text>
-            </HoverButton>
-            <HoverButton
-              onPress={() => setShowWordPractice(true)}
               style={s.btnOutline}
               hoverStyle={s.btnOutlineHover}
             >
-              <Text style={s.btnOutlineText}>단어로 예시문·질문 만들기</Text>
+              <Text style={s.btnOutlineText}>처음으로 돌아가기</Text>
             </HoverButton>
           </View>
         </ScrollView>
@@ -520,17 +550,19 @@ export default function App() {
 
         <View style={s.card}>
           <Text style={s.cardWord}>{currentWord.word}</Text>
-          <HoverButton
-            onPress={() => Speech.speak(currentWord.word, { language: "en-US", rate: 0.9 })}
-            style={s.ttsBtn}
-            hoverStyle={s.ttsBtnHover}
-          >
-            <Text style={s.ttsBtnText}>🔊 발음 듣기</Text>
-          </HoverButton>
           <Text style={s.cardPos}>{currentWord.pos}</Text>
 
           {showMeaning ? (
-            <Text style={s.cardMeaning}>{currentWord.meaning}</Text>
+            <>
+              <Text style={s.cardMeaning}>{currentWord.meaning}</Text>
+              <HoverButton
+                onPress={() => Speech.speak(currentWord.word, { language: "en-US", rate: 0.9 })}
+                style={[s.ttsBtn, { marginTop: 16 }]}
+                hoverStyle={s.ttsBtnHover}
+              >
+                <Text style={s.ttsBtnText}>🔊 발음 듣기</Text>
+              </HoverButton>
+            </>
           ) : (
             <HoverButton
               onPress={() => setShowMeaning(true)}
@@ -544,18 +576,11 @@ export default function App() {
 
         <View style={s.choiceRow}>
           <HoverButton
-            onPress={handleKnow}
-            style={s.btnKnow}
-            hoverStyle={s.btnKnowHover}
+            onPress={handleNext}
+            style={[s.btnPrimary, { minWidth: 200, paddingHorizontal: 48 }]}
+            hoverStyle={s.btnPrimaryHover}
           >
-            <Text style={s.btnKnowText}>알겠다</Text>
-          </HoverButton>
-          <HoverButton
-            onPress={handleDontKnow}
-            style={s.btnDontKnow}
-            hoverStyle={s.btnDontKnowHover}
-          >
-            <Text style={s.btnDontKnowText}>모르겠다</Text>
+            <Text style={s.btnPrimaryText}>다음</Text>
           </HoverButton>
         </View>
       </View>
@@ -1035,6 +1060,546 @@ function PracticeWriteScreen({
   );
 }
 
+// ─────────── Quiz Screen (빈칸 채우기 + 한국어↔영어 랜덤) ───────────
+
+type QuizData = {
+  word: string;
+  sentences: { original: string; blanked: string }[];
+};
+
+type QuizItem = {
+  word: string;
+  meaning: string;
+  pos: string;
+  type: "fill_blank" | "ko_to_en";
+  prompt: string;
+  correctAnswer: string;
+};
+
+function buildQuizItems(quizData: QuizData[], words: Word[]): QuizItem[] {
+  const items: QuizItem[] = [];
+  for (const qd of quizData) {
+    const w = words.find((x) => x.word.toLowerCase() === qd.word.toLowerCase());
+    if (!w) continue;
+    const types: ("fill_blank" | "ko_to_en")[] = [];
+    if (qd.sentences.length >= 2) {
+      types.push(Math.random() < 0.5 ? "fill_blank" : "ko_to_en");
+      types.push(types[0] === "fill_blank" ? "ko_to_en" : "fill_blank");
+    } else {
+      types.push(Math.random() < 0.5 ? "fill_blank" : "ko_to_en");
+    }
+    for (let i = 0; i < types.length; i++) {
+      const t = types[i];
+      if (t === "fill_blank" && qd.sentences[i]) {
+        items.push({
+          word: w.word, meaning: w.meaning, pos: w.pos,
+          type: "fill_blank",
+          prompt: qd.sentences[i].blanked,
+          correctAnswer: w.word,
+        });
+      } else {
+        items.push({
+          word: w.word, meaning: w.meaning, pos: w.pos,
+          type: "ko_to_en",
+          prompt: w.meaning,
+          correctAnswer: w.word,
+        });
+      }
+    }
+  }
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
+}
+
+function QuizScreen({
+  token,
+  words,
+  onFinish,
+  onBack,
+}: {
+  token: string | null;
+  words: Word[];
+  onFinish: (results: QuizResultItem[]) => void;
+  onBack: () => void;
+}) {
+  const [quizItems, setQuizItems] = useState<QuizItem[]>([]);
+  const [generating, setGenerating] = useState(true);
+  const [genError, setGenError] = useState("");
+  const [idx, setIdx] = useState(0);
+  const [answer, setAnswer] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [results, setResults] = useState<QuizResultItem[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/quiz/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ words: words.map((w) => w.word) }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "퀴즈 생성 실패");
+        const items = buildQuizItems(data.quiz || [], words);
+        setQuizItems(items);
+      } catch (err: any) {
+        setGenError(err.message);
+      } finally {
+        setGenerating(false);
+      }
+    })();
+  }, [words]);
+
+  const current = quizItems[idx];
+  const isCorrect = submitted ? answer.trim().toLowerCase() === current?.correctAnswer?.toLowerCase() : false;
+
+  const handleSubmit = useCallback(() => {
+    if (!current) return;
+
+    if (!submitted) {
+      setSubmitted(true);
+      return;
+    }
+
+    const newResults: QuizResultItem[] = [...results, {
+      word: current.word,
+      meaning: current.meaning,
+      pos: current.pos,
+      quiz_type: current.type,
+      prompt: current.prompt,
+      user_answer: answer.trim(),
+      correct_answer: current.correctAnswer,
+      is_correct: answer.trim().toLowerCase() === current.correctAnswer.toLowerCase(),
+    }];
+    setResults(newResults);
+
+    if (idx + 1 >= quizItems.length) {
+      setSaving(true);
+      if (token) {
+        fetch(`${API_BASE}/api/quiz/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ results: newResults }),
+        }).catch(() => {}).finally(() => {
+          setSaving(false);
+          onFinish(newResults);
+        });
+      } else {
+        setSaving(false);
+        onFinish(newResults);
+      }
+      return;
+    }
+
+    setIdx((i) => i + 1);
+    setAnswer("");
+    setSubmitted(false);
+  }, [submitted, current, answer, results, idx, quizItems.length, token, onFinish]);
+
+  if (generating) {
+    return (
+      <View style={s.center}>
+        <ActivityIndicator size="large" color="#000000" />
+        <Text style={s.loadingText}>AI가 퀴즈 문장을 생성하고 있습니다...</Text>
+      </View>
+    );
+  }
+
+  if (genError || quizItems.length === 0) {
+    return (
+      <View style={s.page}>
+        <View style={s.topBar}>
+          <HoverButton onPress={onBack} style={s.backBtn} hoverStyle={s.backBtnHover}>
+            <Text style={s.backBtnText}>← 돌아가기</Text>
+          </HoverButton>
+          <View />
+        </View>
+        <View style={s.content}>
+          <Text style={s.errorText}>{genError || "퀴즈 생성에 실패했습니다"}</Text>
+          <HoverButton onPress={onBack} style={[s.btnPrimary, { marginTop: 12 }]} hoverStyle={s.btnPrimaryHover}>
+            <Text style={s.btnPrimaryText}>돌아가기</Text>
+          </HoverButton>
+        </View>
+      </View>
+    );
+  }
+
+  if (saving) {
+    return (
+      <View style={s.center}>
+        <ActivityIndicator size="large" color="#000000" />
+        <Text style={s.loadingText}>퀴즈 결과 저장 중...</Text>
+      </View>
+    );
+  }
+
+  if (!current) return null;
+
+  return (
+    <View style={s.page}>
+      <View style={s.topBar}>
+        <HoverButton onPress={onBack} style={s.backBtn} hoverStyle={s.backBtnHover}>
+          <Text style={s.backBtnText}>← 건너뛰기</Text>
+        </HoverButton>
+        <Text style={s.topBarLogo}>퀴즈</Text>
+        <View style={{ width: 60 }} />
+      </View>
+
+      <View style={s.content}>
+        <Text style={s.progress}>
+          {idx + 1} / {quizItems.length}
+        </Text>
+
+        <View style={s.card}>
+          <Text style={[s.label, { marginBottom: 12 }]}>
+            {current.type === "ko_to_en" ? "한국어 뜻 → 영어 단어 입력" : "빈칸에 들어갈 영어 단어 입력"}
+          </Text>
+
+          {current.type === "ko_to_en" ? (
+            <Text style={s.cardWord}>{current.prompt}</Text>
+          ) : (
+            <Text style={{ fontSize: 16, color: "#000000", lineHeight: 26, textAlign: "center" }}>
+              {current.prompt}
+            </Text>
+          )}
+
+          <TextInput
+            style={[
+              s.quizInput,
+              submitted && (isCorrect ? s.quizInputCorrect : s.quizInputWrong),
+            ]}
+            placeholder="영어 단어를 입력하세요"
+            placeholderTextColor="#C4C4C4"
+            value={answer}
+            onChangeText={setAnswer}
+            onSubmitEditing={handleSubmit}
+            autoCapitalize="none"
+            editable={!submitted}
+            autoFocus
+          />
+
+          {submitted && (
+            <View style={s.quizFeedback}>
+              <Text style={[s.quizFeedbackText, isCorrect ? { color: "#22C55E" } : { color: "#EF4444" }]}>
+                {isCorrect ? "정답!" : "오답"}
+              </Text>
+              {!isCorrect && (
+                <Text style={s.quizCorrectAnswer}>정답: {current.correctAnswer}</Text>
+              )}
+            </View>
+          )}
+        </View>
+
+        <HoverButton
+          onPress={handleSubmit}
+          style={[s.btnPrimary, { marginTop: 20, maxWidth: 420 }]}
+          hoverStyle={s.btnPrimaryHover}
+        >
+          <Text style={s.btnPrimaryText}>
+            {submitted
+              ? idx + 1 >= quizItems.length ? "결과 보기" : "다음 문제"
+              : "정답 확인"}
+          </Text>
+        </HoverButton>
+      </View>
+    </View>
+  );
+}
+
+// ─────────── Composition Screen (AI 작문 연습) ───────────
+
+function CompositionScreen({
+  token,
+  words,
+  onBack,
+  onHome,
+}: {
+  token: string | null;
+  words: Word[];
+  onBack: () => void;
+  onHome: () => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [aiEnglish, setAiEnglish] = useState("");
+  const [aiKorean, setAiKorean] = useState("");
+  const [userWriting, setUserWriting] = useState("");
+  const [saveStatus, setSaveStatus] = useState<"" | "saving" | "saved" | "error">("");
+  const [showAnswer, setShowAnswer] = useState(false);
+
+  const handleGenerate = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    setAiEnglish("");
+    setAiKorean("");
+    setUserWriting("");
+    setShowAnswer(false);
+    setSaveStatus("");
+    try {
+      const res = await fetch(`${API_BASE}/api/composition/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ words: words.map((w) => w.word) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "작문 생성 실패");
+      setAiEnglish(data.english || "");
+      setAiKorean(data.korean || "");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [words]);
+
+  const handleSave = useCallback(async () => {
+    if (!token) return;
+    setSaveStatus("saving");
+    try {
+      const res = await fetch(`${API_BASE}/api/composition/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          words: words.map((w) => w.word),
+          ai_english: aiEnglish,
+          ai_korean: aiKorean,
+          user_writing: userWriting,
+        }),
+      });
+      if (!res.ok) throw new Error("저장 실패");
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("error");
+    }
+  }, [token, words, aiEnglish, aiKorean, userWriting]);
+
+  return (
+    <View style={s.page}>
+      <View style={s.topBar}>
+        <HoverButton onPress={onBack} style={s.backBtn} hoverStyle={s.backBtnHover}>
+          <Text style={s.backBtnText}>← 돌아가기</Text>
+        </HoverButton>
+        <View />
+      </View>
+
+      <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
+        <Text style={s.heading}>AI 영어 작문 연습</Text>
+        <Text style={s.desc}>
+          학습한 단어로 AI가 영어 작문을 생성합니다.{"\n"}
+          한국어 번역을 보고 영어로 작문해 보세요.
+        </Text>
+
+        <View style={s.listCard}>
+          <Text style={s.listTitle}>사용 단어</Text>
+          <Text style={{ fontSize: 13, color: "#666666", lineHeight: 22 }}>
+            {words.map((w) => w.word).join(", ")}
+          </Text>
+        </View>
+
+        {!aiEnglish && !loading && (
+          <HoverButton onPress={handleGenerate} style={s.btnPrimary} hoverStyle={s.btnPrimaryHover}>
+            <Text style={s.btnPrimaryText}>AI 작문 생성하기</Text>
+          </HoverButton>
+        )}
+
+        {loading && (
+          <View style={{ alignItems: "center", marginTop: 24 }}>
+            <ActivityIndicator size="large" color="#000000" />
+            <Text style={s.loadingText}>phi3가 영어 작문을 생성하고 qwen2가 번역 중...</Text>
+          </View>
+        )}
+
+        {!!error && <Text style={[s.errorText, { marginTop: 16 }]}>{error}</Text>}
+
+        {!!aiKorean && (
+          <View style={[s.practiceCard, { marginTop: 16 }]}>
+            <Text style={s.practiceLabel}>한국어 (AI 번역)</Text>
+            <Text style={{ fontSize: 14, color: "#000000", lineHeight: 24 }}>{aiKorean}</Text>
+          </View>
+        )}
+
+        {!!aiEnglish && (
+          <>
+            <View style={[s.practiceCard, { marginTop: 12 }]}>
+              <Text style={s.practiceLabel}>영어로 작문해 보세요</Text>
+              <TextInput
+                style={[s.practiceAnswerInput, { minHeight: 120 }]}
+                placeholder="위 한국어를 영어로 작문하세요..."
+                placeholderTextColor="#C4C4C4"
+                value={userWriting}
+                onChangeText={setUserWriting}
+                multiline
+              />
+            </View>
+
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 12, width: "100%", maxWidth: 420 }}>
+              <HoverButton
+                onPress={() => setShowAnswer(!showAnswer)}
+                style={[s.btnOutline, { flex: 1 }]}
+                hoverStyle={s.btnOutlineHover}
+              >
+                <Text style={s.btnOutlineText}>{showAnswer ? "정답 숨기기" : "정답 보기"}</Text>
+              </HoverButton>
+              <HoverButton
+                onPress={handleSave}
+                style={[s.generateBtn, { flex: 1, alignItems: "center" }, !token && { opacity: 0.5 }]}
+                hoverStyle={s.generateBtnHover}
+                disabled={!token || saveStatus === "saving"}
+              >
+                <Text style={s.generateBtnText}>
+                  {saveStatus === "saving" ? "저장 중..." : saveStatus === "saved" ? "저장됨 ✓" : "저장"}
+                </Text>
+              </HoverButton>
+            </View>
+
+            {showAnswer && (
+              <View style={[s.practiceCard, { marginTop: 12 }]}>
+                <Text style={s.practiceLabel}>AI 영어 작문 (정답)</Text>
+                <Text style={{ fontSize: 14, color: "#000000", lineHeight: 24 }}>{aiEnglish}</Text>
+              </View>
+            )}
+
+            <HoverButton
+              onPress={onHome}
+              style={[s.btnOutline, { marginTop: 20 }]}
+              hoverStyle={s.btnOutlineHover}
+            >
+              <Text style={s.btnOutlineText}>처음으로 돌아가기</Text>
+            </HoverButton>
+          </>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+// ─────────── Word Detail Screen ───────────
+
+type QuizHistoryItem = {
+  quiz_type: string;
+  prompt: string;
+  user_answer: string;
+  correct_answer: string;
+  is_correct: number;
+  quizzed_at: string;
+};
+
+function WordDetailScreen({
+  token,
+  wordName,
+  onBack,
+}: {
+  token: string | null;
+  wordName: string;
+  onBack: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [wordInfo, setWordInfo] = useState<{ word: string; meaning: string; pos: string; status: string } | null>(null);
+  const [quizHistory, setQuizHistory] = useState<QuizHistoryItem[]>([]);
+
+  useEffect(() => {
+    if (!token) { setLoading(false); return; }
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/quiz/word/${encodeURIComponent(wordName)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setWordInfo(data.word);
+          setQuizHistory(data.quizHistory || []);
+        }
+      } catch {}
+      setLoading(false);
+    })();
+  }, [token, wordName]);
+
+  const formatDate = (ds: string) => {
+    const d = new Date(ds);
+    return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  return (
+    <View style={s.page}>
+      <View style={s.topBar}>
+        <HoverButton onPress={onBack} style={s.backBtn} hoverStyle={s.backBtnHover}>
+          <Text style={s.backBtnText}>← 돌아가기</Text>
+        </HoverButton>
+        <View />
+      </View>
+
+      <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
+        {loading ? (
+          <ActivityIndicator size="large" color="#000000" style={{ marginTop: 48 }} />
+        ) : (
+          <>
+            <View style={[s.card, { marginBottom: 20 }]}>
+              <Text style={s.cardWord}>{wordName}</Text>
+              {wordInfo && (
+                <>
+                  <Text style={s.cardPos}>{wordInfo.pos}</Text>
+                  <Text style={s.cardMeaning}>{wordInfo.meaning}</Text>
+                  <View style={{ marginTop: 12, alignSelf: "center" }}>
+                    <Text style={[s.myWordBadge, wordInfo.status === "known" ? s.badgeKnown : s.badgeUnknown, { width: "auto", height: "auto", fontSize: 14, paddingHorizontal: 16, paddingVertical: 6, borderRadius: 16, lineHeight: 20 }]}>
+                      {wordInfo.status === "known" ? "아는 단어" : "모르는 단어"}
+                    </Text>
+                  </View>
+                </>
+              )}
+            </View>
+
+            {(() => {
+              const wrongItems = quizHistory.filter((q) => !q.is_correct);
+              if (wrongItems.length === 0 && quizHistory.length > 0) {
+                return <Text style={s.desc}>모든 문제를 맞혔습니다</Text>;
+              }
+              if (wrongItems.length === 0) {
+                return <Text style={s.desc}>퀴즈 기록이 없습니다</Text>;
+              }
+              return (
+                <>
+                  <Text style={[s.heading, { fontSize: 18, marginBottom: 12 }]}>틀린 퀴즈 기록</Text>
+                  {wrongItems.map((q, i) => (
+                    <View key={i} style={[s.listCard, { marginBottom: 12 }]}>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 10 }}>
+                        <Text style={{ fontSize: 12, color: "#EF4444", fontWeight: "600" }}>
+                          {q.quiz_type === "ko_to_en" ? "한국어 → 영어" : "빈칸 채우기"}
+                        </Text>
+                        <Text style={{ fontSize: 12, color: "#9CA3AF" }}>{formatDate(q.quizzed_at)}</Text>
+                      </View>
+
+                      {q.quiz_type === "fill_blank" && !!q.prompt ? (
+                        <View style={{ backgroundColor: "#F0FDF4", borderRadius: 8, padding: 12 }}>
+                          <Text style={{ fontSize: 15, color: "#111827", lineHeight: 24 }}>
+                            {q.prompt.replace(/____/g, q.correct_answer)}
+                          </Text>
+                          <Text style={{ fontSize: 12, color: "#16A34A", marginTop: 6 }}>
+                            정답: {q.correct_answer}
+                          </Text>
+                        </View>
+                      ) : (
+                        <View style={{ backgroundColor: "#F0FDF4", borderRadius: 8, padding: 12 }}>
+                          <Text style={{ fontSize: 15, color: "#111827", lineHeight: 24 }}>
+                            {wordInfo?.meaning || q.prompt}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  ))}
+                </>
+              );
+            })()}
+          </>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
 // ─────────── My Words Screen ───────────
 
 type MyWord = {
@@ -1042,6 +1607,7 @@ type MyWord = {
   meaning: string;
   pos: string;
   status: "known" | "unknown";
+  quiz_sentence: string;
   studied_at: string;
 };
 
@@ -1067,6 +1633,7 @@ function MyWordsScreen({
   const [unknown, setUnknown] = useState<MyWord[]>([]);
   const [practiceList, setPracticeList] = useState<PracticeRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedWord, setSelectedWord] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -1105,10 +1672,20 @@ function MyWordsScreen({
     return acc;
   }, []);
 
-  const formatDate = (s: string) => {
-    const d = new Date(s);
+  const formatDate = (ds: string) => {
+    const d = new Date(ds);
     return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   };
+
+  if (selectedWord) {
+    return (
+      <WordDetailScreen
+        token={token}
+        wordName={selectedWord}
+        onBack={() => setSelectedWord(null)}
+      />
+    );
+  }
 
   return (
     <View style={s.page}>
@@ -1173,18 +1750,22 @@ function MyWordsScreen({
         ) : (
           <View style={s.listCard}>
             {uniqueWords.map((w, i) => (
-              <View
+              <Pressable
                 key={`${w.word}-${i}`}
+                onPress={() => setSelectedWord(w.word)}
                 style={[s.listRow, i === uniqueWords.length - 1 && { borderBottomWidth: 0 }]}
               >
                 <View style={{ flex: 1 }}>
                   <Text style={s.listWord}>{w.word}</Text>
                   <Text style={s.listMeaning}>{w.meaning}</Text>
+                  {!!w.quiz_sentence && (
+                    <Text style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>퀴즈 기록 있음 →</Text>
+                  )}
                 </View>
                 <Text style={[s.myWordBadge, w.status === "known" ? s.badgeKnown : s.badgeUnknown]}>
                   {w.status === "known" ? "O" : "X"}
                 </Text>
-              </View>
+              </Pressable>
             ))}
           </View>
         )}
@@ -1800,6 +2381,44 @@ const s = StyleSheet.create({
   badgeUnknown: {
     backgroundColor: "#000000",
     color: "#FFFFFF",
+  },
+
+  // Quiz
+  quizInput: {
+    width: "100%",
+    height: 48,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    borderRadius: 6,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    fontWeight: "300" as const,
+    color: "#000000",
+    backgroundColor: "#FFFFFF",
+    textAlign: "center" as const,
+    marginTop: 20,
+  },
+  quizInputCorrect: {
+    borderColor: "#22C55E",
+    backgroundColor: "#F0FFF4",
+  },
+  quizInputWrong: {
+    borderColor: "#EF4444",
+    backgroundColor: "#FFF5F5",
+  },
+  quizFeedback: {
+    marginTop: 12,
+    alignItems: "center" as const,
+  },
+  quizFeedbackText: {
+    fontSize: 16,
+    fontWeight: "500" as const,
+  },
+  quizCorrectAnswer: {
+    fontSize: 14,
+    fontWeight: "300" as const,
+    color: "#666666",
+    marginTop: 4,
   },
 
   // Main screen
