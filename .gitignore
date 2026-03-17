@@ -47,8 +47,24 @@ android/
 .idea/
 .vscode/
 
+# SSL certificates
+api/certs/
+
 # Google Play service account key
 google-service-account.json
 
 # DB backups
 *.sql
+
+# Server internal source (deploy / demo — hide implementation)
+api/src/
+api/.env
+api/.env.*
+deploy/
+ecosystem.config.js
+docker-compose.yml
+docker-compose*.yml
+db_schema.sql
+toeic.json
+docs/
+app/
